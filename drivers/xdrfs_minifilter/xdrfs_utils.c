@@ -5,6 +5,42 @@
 
 #include "xdrfs.h"
 
+typedef struct _XDRFS_EVENT_WORK_ITEM {
+    WORK_QUEUE_ITEM WorkItem;
+    PXDR_EVENT_RECORD EventRecord;
+} XDRFS_EVENT_WORK_ITEM, *PXDRFS_EVENT_WORK_ITEM;
+
+static VOID XdrfsPublishEventWorker(_In_ PVOID Context)
+{
+    PXDRFS_EVENT_WORK_ITEM work = (PXDRFS_EVENT_WORK_ITEM)Context;
+    if (work && work->EventRecord) {
+        (void)XdrfsPublishEventToCore(work->EventRecord);
+        ExFreePoolWithTag(work->EventRecord, XDRFS_POOL_TAG);
+    }
+    ExFreePoolWithTag(work, XDRFS_POOL_TAG);
+}
+
+static NTSTATUS XdrfsQueueFileEvent(_In_ PXDR_EVENT_RECORD Event)
+{
+    PXDRFS_EVENT_WORK_ITEM work;
+
+    if (g_FilterData.Stopping) {
+        ExFreePoolWithTag(Event, XDRFS_POOL_TAG);
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    work = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*work), XDRFS_POOL_TAG);
+    if (!work) {
+        ExFreePoolWithTag(Event, XDRFS_POOL_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    work->EventRecord = Event;
+    ExInitializeWorkItem(&work->WorkItem, XdrfsPublishEventWorker, work);
+    ExQueueWorkItem(&work->WorkItem, DelayedWorkQueue);
+    return STATUS_SUCCESS;
+}
+
 //
 // Get file name information
 //
@@ -60,7 +96,7 @@ XdrfsShouldIgnoreFile(
 
     // Convert to uppercase for comparison
     len = FileName->Length / sizeof(WCHAR);
-    fileNameUpper = ExAllocatePoolWithTag(PagedPool, FileName->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
+    fileNameUpper = ExAllocatePoolWithTag(NonPagedPoolNx, FileName->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
     if (!fileNameUpper) {
         return FALSE; // If we can't allocate, don't ignore
     }
@@ -235,7 +271,7 @@ XdrfsGenerateFileEvent(
     _In_ ULONG ThreadId
 )
 {
-    XDR_EVENT_RECORD eventRecord;
+    PXDR_EVENT_RECORD eventRecord;
     XDR_FILE_EVENT* fileEvent;
     LARGE_INTEGER timestamp;
     NTSTATUS status;
@@ -245,47 +281,44 @@ XdrfsGenerateFileEvent(
         return STATUS_INVALID_PARAMETER;
     }
 
-    // Initialize event record
-    RtlZeroMemory(&eventRecord, sizeof(eventRecord));
-    eventRecord.total_size = sizeof(XDR_EVENT_RECORD);
-
-    // Fill header
-    eventRecord.header.version = XDR_ABI_VERSION;
-    eventRecord.header.source = XDR_SOURCE_FILE;
-    eventRecord.header.severity = XDR_SEVERITY_LOW;
-    eventRecord.header.process_id = ProcessId;
-    eventRecord.header.thread_id = ThreadId;
-
-    KeQuerySystemTimePrecise(&timestamp);
-    eventRecord.header.timestamp_100ns = timestamp.QuadPart;
-
-    // Sequence number (simplified)
-    eventRecord.header.sequence_number = InterlockedIncrement64(&g_FilterData.TotalEvents);
-
-    // Key hash based on file path
-    eventRecord.header.key_hash = 0;
-    if (NameInfo->Name.Buffer && NameInfo->Name.Length > 0) {
-        ULONG i;
-        ULONG64 hash = 0xcbf29ce484222325ULL; // FNV offset basis
-        
-        for (i = 0; i < NameInfo->Name.Length / sizeof(WCHAR); i++) {
-            hash ^= (ULONG64)NameInfo->Name.Buffer[i];
-            hash *= 0x100000001b3ULL; // FNV prime
-        }
-        eventRecord.header.key_hash = hash;
+    eventRecord = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(XDR_EVENT_RECORD), XDRFS_POOL_TAG);
+    if (!eventRecord) {
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    // Fill file event payload
-    fileEvent = &eventRecord.payload.file;
+    RtlZeroMemory(eventRecord, sizeof(XDR_EVENT_RECORD));
+    eventRecord->total_size = sizeof(XDR_EVENT_RECORD);
+
+    eventRecord->header.version = XDR_ABI_VERSION;
+    eventRecord->header.source = XDR_SOURCE_FILE;
+    eventRecord->header.severity = XDR_SEVERITY_LOW;
+    eventRecord->header.process_id = ProcessId;
+    eventRecord->header.thread_id = ThreadId;
+
+    KeQuerySystemTimePrecise(&timestamp);
+    eventRecord->header.timestamp_100ns = timestamp.QuadPart;
+
+    eventRecord->header.sequence_number = InterlockedIncrement64(&g_FilterData.TotalEvents);
+
+    eventRecord->header.key_hash = 0;
+    if (NameInfo->Name.Buffer && NameInfo->Name.Length > 0) {
+        ULONG i;
+        ULONG64 hash = 0xcbf29ce484222325ULL;
+        for (i = 0; i < NameInfo->Name.Length / sizeof(WCHAR); i++) {
+            hash ^= (ULONG64)NameInfo->Name.Buffer[i];
+            hash *= 0x100000001b3ULL;
+        }
+        eventRecord->header.key_hash = hash;
+    }
+
+    fileEvent = &eventRecord->payload.file;
     fileEvent->operation = Operation;
     fileEvent->create_disposition = CreateDisposition;
     fileEvent->file_size = FileSize;
     fileEvent->file_attributes = FileAttributes;
 
-    // Get process image hash
     XdrfsGetProcessImageHash(PsGetCurrentProcess(), &fileEvent->process_image_hash);
 
-    // Copy file path (truncated if necessary)
     if (NameInfo->Name.Buffer && NameInfo->Name.Length > 0) {
         ULONG copyLength = min(NameInfo->Name.Length,
                               (XDR_MAX_PATH - 1) * sizeof(WCHAR));
@@ -295,22 +328,19 @@ XdrfsGenerateFileEvent(
         fileEvent->file_path[copyLength / sizeof(WCHAR)] = L'\0';
     }
 
-    // Extract and copy file extension
     XdrfsExtractFileExtension(&NameInfo->Name, extension, RTL_NUMBER_OF(extension));
     RtlStringCchCopyW(fileEvent->file_extension,
                      RTL_NUMBER_OF(fileEvent->file_extension),
                      extension);
 
-    // Adjust severity for high-risk operations
     if (XdrfsIsHighRiskOperation(Operation, &NameInfo->Name, CreateDisposition)) {
-        eventRecord.header.severity = XDR_SEVERITY_MEDIUM;
+        eventRecord->header.severity = XDR_SEVERITY_MEDIUM;
     }
 
-    // Send to core driver
-    status = XdrfsPublishEventToCore(&eventRecord);
+    status = XdrfsQueueFileEvent(eventRecord);
     if (!NT_SUCCESS(status)) {
         InterlockedIncrement64(&g_FilterData.DroppedEvents);
-        XdrfsDebugPrint("Failed to publish file event: 0x%08X", status);
+        XdrfsDebugPrint("Failed to queue file event: 0x%08X", status);
     }
 
     return status;
@@ -405,7 +435,7 @@ XdrfsIsSystemDirectory(
 
     // Convert to uppercase for comparison
     len = FilePath->Length / sizeof(WCHAR);
-    pathUpper = ExAllocatePoolWithTag(PagedPool, FilePath->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
+    pathUpper = ExAllocatePoolWithTag(NonPagedPoolNx, FilePath->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
     if (!pathUpper) {
         return FALSE;
     }
@@ -456,7 +486,7 @@ XdrfsIsTemporaryFile(
 
     // Convert to uppercase for comparison
     len = FilePath->Length / sizeof(WCHAR);
-    pathUpper = ExAllocatePoolWithTag(PagedPool, FilePath->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
+    pathUpper = ExAllocatePoolWithTag(NonPagedPoolNx, FilePath->Length + sizeof(WCHAR), XDRFS_NAME_TAG);
     if (!pathUpper) {
         return FALSE;
     }
@@ -491,10 +521,11 @@ XdrfsConnectToCore(VOID)
     OBJECT_ATTRIBUTES objectAttributes;
     IO_STATUS_BLOCK ioStatus;
 
-    ExAcquireFastMutex(&g_FilterData.ConnectionLock);
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_FilterData.ConnectionLock, &oldIrql);
 
     if (g_FilterData.Connected) {
-        ExReleaseFastMutex(&g_FilterData.ConnectionLock);
+        KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
         return STATUS_SUCCESS;
     }
 
@@ -535,7 +566,7 @@ XdrfsConnectToCore(VOID)
         }
     }
 
-    ExReleaseFastMutex(&g_FilterData.ConnectionLock);
+    KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
     return status;
 }
 
@@ -545,7 +576,8 @@ XdrfsConnectToCore(VOID)
 VOID
 XdrfsDisconnectFromCore(VOID)
 {
-    ExAcquireFastMutex(&g_FilterData.ConnectionLock);
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_FilterData.ConnectionLock, &oldIrql);
 
     if (g_FilterData.Connected) {
         if (g_FilterData.CoreFileObject) {
@@ -562,7 +594,7 @@ XdrfsDisconnectFromCore(VOID)
         XdrfsInfoPrint("Disconnected from core driver");
     }
 
-    ExReleaseFastMutex(&g_FilterData.ConnectionLock);
+    KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
 }
 
 //
@@ -583,16 +615,16 @@ XdrfsPublishEventToCore(
         return STATUS_INVALID_PARAMETER;
     }
 
-    ExAcquireFastMutex(&g_FilterData.ConnectionLock);
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&g_FilterData.ConnectionLock, &oldIrql);
 
     if (!g_FilterData.Connected) {
-        ExReleaseFastMutex(&g_FilterData.ConnectionLock);
-        // Try to reconnect
+        KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
         status = XdrfsConnectToCore();
         if (!NT_SUCCESS(status)) {
             return status;
         }
-        ExAcquireFastMutex(&g_FilterData.ConnectionLock);
+        KeAcquireSpinLock(&g_FilterData.ConnectionLock, &oldIrql);
     }
 
     // Create IRP for IOCTL
@@ -609,7 +641,7 @@ XdrfsPublishEventToCore(
                                       &ioStatus);
 
     if (!irp) {
-        ExReleaseFastMutex(&g_FilterData.ConnectionLock);
+        KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -625,7 +657,7 @@ XdrfsPublishEventToCore(
         status = ioStatus.Status;
     }
 
-    ExReleaseFastMutex(&g_FilterData.ConnectionLock);
+    KeReleaseSpinLock(&g_FilterData.ConnectionLock, oldIrql);
 
     if (!NT_SUCCESS(status)) {
         XdrfsDebugPrint("Failed to publish event to core: 0x%08X", status);

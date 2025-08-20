@@ -29,6 +29,7 @@ DriverEntry(
     InitializeListHead(&g_WfpData.FlowList);
     KeInitializeSpinLock(&g_WfpData.FlowListLock);
     KeInitializeSpinLock(&g_WfpData.ConnectionLock);
+    g_WfpData.Stopping = FALSE;
     
     // Default configuration
     g_WfpData.MonitorMode = TRUE;        // Start in monitor-only mode
@@ -93,7 +94,9 @@ XdrwfpUnload(
     XdrwfpInfoPrint("XDR WFP Callout Driver unloading...");
 
     // Stop statistics timer
+    g_WfpData.Stopping = TRUE;
     XdrwfpStopStatsTimer();
+    KeFlushQueuedDpcs();
 
     // Disconnect from core driver
     XdrwfpDisconnectFromCore();

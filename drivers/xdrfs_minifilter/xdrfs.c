@@ -85,7 +85,8 @@ DriverEntry(
 
     // Initialize global data
     RtlZeroMemory(&g_FilterData, sizeof(g_FilterData));
-    ExInitializeFastMutex(&g_FilterData.ConnectionLock);
+    KeInitializeSpinLock(&g_FilterData.ConnectionLock);
+    g_FilterData.Stopping = FALSE;
 
     // Register the filter
     status = FltRegisterFilter(DriverObject,
@@ -129,6 +130,9 @@ XdrfsUnload(
 
     XdrfsInfoPrint("XDR Filesystem Minifilter unloading...");
 
+    g_FilterData.Stopping = TRUE;
+    KeFlushQueuedDpcs();
+
     // Disconnect from core driver
     XdrfsDisconnectFromCore();
 
@@ -169,7 +173,7 @@ XdrfsInstanceSetup(
     status = FltAllocateContext(g_FilterData.Filter,
                               FLT_VOLUME_CONTEXT,
                               XDRFS_VOLUME_CONTEXT_SIZE,
-                              PagedPool,
+                              NonPagedPoolNx,
                               &volumeContext);
 
     if (!NT_SUCCESS(status)) {
@@ -313,6 +317,13 @@ XdrfsPreCreate(
 //
 // Post-create callback
 //
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostCreateSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags);
+
 FLT_POSTOP_CALLBACK_STATUS
 XdrfsPostCreate(
     _Inout_ PFLT_CALLBACK_DATA Data,
@@ -321,40 +332,42 @@ XdrfsPostCreate(
     _In_ FLT_POST_OPERATION_FLAGS Flags
 )
 {
+    return FltDoCompletionProcessingWhenSafe(Data, FltObjects, CompletionContext, Flags, XdrfsPostCreateSafe, NULL);
+}
+
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostCreateSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     PXDRFS_STREAM_CONTEXT streamContext = NULL;
     ULONG createDisposition;
-    BOOLEAN isDirectory;
-    
+
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(Flags);
 
-    // Skip if the operation failed
     if (!NT_SUCCESS(Data->IoStatus.Status)) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Skip directories initially
     if (FltObjects->FileObject->Flags & FO_DIRECTORY_FILE) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Get file name information
     status = XdrfsGetFileNameInformation(Data, FltObjects, &nameInfo);
     if (!NT_SUCCESS(status) || !nameInfo) {
         goto Cleanup;
     }
 
-    // Check if we should ignore this file
     if (XdrfsShouldIgnoreFile(&nameInfo->Name)) {
         goto Cleanup;
     }
 
-    // Get create disposition from parameters
     createDisposition = Data->Iopb->Parameters.Create.Options & 0xFF;
-
-    // Only track certain create dispositions
     if (createDisposition != FILE_CREATE &&
         createDisposition != FILE_OVERWRITE &&
         createDisposition != FILE_OVERWRITE_IF &&
@@ -362,70 +375,64 @@ XdrfsPostCreate(
         goto Cleanup;
     }
 
-    // Create stream context
     status = FltAllocateContext(g_FilterData.Filter,
                               FLT_STREAM_CONTEXT,
                               XDRFS_STREAM_CONTEXT_SIZE,
-                              PagedPool,
+                              NonPagedPoolNx,
                               &streamContext);
 
     if (NT_SUCCESS(status)) {
         RtlZeroMemory(streamContext, XDRFS_STREAM_CONTEXT_SIZE);
-        
-        // Copy file name
+
         streamContext->FileName.Length = nameInfo->Name.Length;
         streamContext->FileName.MaximumLength = nameInfo->Name.MaximumLength;
-        streamContext->FileName.Buffer = ExAllocatePoolWithTag(PagedPool,
+        streamContext->FileName.Buffer = ExAllocatePoolWithTag(NonPagedPoolNx,
                                                              nameInfo->Name.MaximumLength,
                                                              XDRFS_NAME_TAG);
-        
+
         if (streamContext->FileName.Buffer) {
             RtlCopyMemory(streamContext->FileName.Buffer,
                          nameInfo->Name.Buffer,
                          nameInfo->Name.Length);
-            
-            // Extract file extension
+
             XdrfsExtractFileExtension(&nameInfo->Name,
                                     streamContext->FileExtension,
                                     RTL_NUMBER_OF(streamContext->FileExtension));
-            
+
             streamContext->IsExecutable = XdrfsIsExecutableExtension(streamContext->FileExtension);
             streamContext->IsScriptFile = XdrfsIsScriptExtension(streamContext->FileExtension);
-            
-            // Get process image hash
+
             XdrfsGetProcessImageHash(PsGetCurrentProcess(),
                                    &streamContext->ProcessImageHash);
-            
+
             KeQuerySystemTime(&streamContext->CreationTime);
-            
-            // Set the context
+
             FltSetStreamContext(FltObjects->Instance,
                               FltObjects->FileObject,
                               FLT_SET_CONTEXT_KEEP_IF_EXISTS,
                               streamContext,
                               NULL);
         }
+
+        FltReleaseContext(streamContext);
     }
 
-    // Generate file event
+    XdrfsWire_OnPostCreate(Data, FltObjects);
+
     XdrfsGenerateFileEvent(
-    XdrfsWire_OnPostCreate(nameInfo, createDisposition, Data->Iopb->Parameters.Create.FileAttributes, HandleToUlong(PsGetCurrentProcessId()), HandleToUlong(PsGetCurrentThreadId()));
-XDR_FILE_CREATE,
-                          nameInfo,
-                          createDisposition,
-                          Data->Iopb->Parameters.Create.FileAttributes,
-                          0, // Size not available at create time
-                          HandleToUlong(PsGetCurrentProcessId()),
-                          HandleToUlong(PsGetCurrentThreadId()));
+        XDR_FILE_CREATE,
+        nameInfo,
+        createDisposition,
+        Data->Iopb->Parameters.Create.FileAttributes,
+        0,
+        HandleToUlong(PsGetCurrentProcessId()),
+        HandleToUlong(PsGetCurrentThreadId()));
 
     XdrfsUpdateStatistics(XDR_FILE_CREATE);
 
 Cleanup:
     if (nameInfo) {
         FltReleaseFileNameInformation(nameInfo);
-    }
-    if (streamContext) {
-        FltReleaseContext(streamContext);
     }
 
     return FLT_POSTOP_FINISHED_PROCESSING;
@@ -452,6 +459,13 @@ XdrfsPreWrite(
 //
 // Post-write callback
 //
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostWriteSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags);
+
 FLT_POSTOP_CALLBACK_STATUS
 XdrfsPostWrite(
     _Inout_ PFLT_CALLBACK_DATA Data,
@@ -460,54 +474,58 @@ XdrfsPostWrite(
     _In_ FLT_POST_OPERATION_FLAGS Flags
 )
 {
+    return FltDoCompletionProcessingWhenSafe(Data, FltObjects, CompletionContext, Flags, XdrfsPostWriteSafe, NULL);
+}
+
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostWriteSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     PXDRFS_STREAM_CONTEXT streamContext = NULL;
     ULONG64 fileSize;
-    
+
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(Flags);
 
-    // Skip if the operation failed
     if (!NT_SUCCESS(Data->IoStatus.Status)) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Get stream context
     status = FltGetStreamContext(FltObjects->Instance,
                                FltObjects->FileObject,
                                &streamContext);
 
     if (!NT_SUCCESS(status)) {
-        // No context, skip
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Only track writes to executables and scripts for noise reduction
     if (!streamContext->IsExecutable && !streamContext->IsScriptFile) {
         goto Cleanup;
     }
 
-    // Get file name information
     status = XdrfsGetFileNameInformation(Data, FltObjects, &nameInfo);
     if (!NT_SUCCESS(status) || !nameInfo) {
         goto Cleanup;
     }
 
-    // Get file size
-    fileSize = Data->Iopb->Parameters.Write.ByteOffset.QuadPart + 
+    fileSize = Data->Iopb->Parameters.Write.ByteOffset.QuadPart +
                Data->Iopb->Parameters.Write.Length;
 
-    // Generate file event
+    XdrfsWire_OnPostWrite(Data, FltObjects);
+
     XdrfsGenerateFileEvent(
-    XdrfsWire_OnPostWrite(nameInfo, fileSize, HandleToUlong(PsGetCurrentProcessId()), HandleToUlong(PsGetCurrentThreadId()));
-XDR_FILE_WRITE,
-                          nameInfo,
-                          0, // No create disposition for write
-                          0, // No file attributes for write
-                          fileSize,
-                          HandleToUlong(PsGetCurrentProcessId()),
-                          HandleToUlong(PsGetCurrentThreadId()));
+        XDR_FILE_WRITE,
+        nameInfo,
+        0,
+        0,
+        fileSize,
+        HandleToUlong(PsGetCurrentProcessId()),
+        HandleToUlong(PsGetCurrentThreadId()));
 
     XdrfsUpdateStatistics(XDR_FILE_WRITE);
 
@@ -548,6 +566,13 @@ XdrfsPreSetInformation(
 //
 // Post-set information callback
 //
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostSetInformationSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags);
+
 FLT_POSTOP_CALLBACK_STATUS
 XdrfsPostSetInformation(
     _Inout_ PFLT_CALLBACK_DATA Data,
@@ -556,19 +581,27 @@ XdrfsPostSetInformation(
     _In_ FLT_POST_OPERATION_FLAGS Flags
 )
 {
+    return FltDoCompletionProcessingWhenSafe(Data, FltObjects, CompletionContext, Flags, XdrfsPostSetInformationSafe, NULL);
+}
+
+static FLT_POSTOP_CALLBACK_STATUS
+XdrfsPostSetInformationSafe(
+    _Inout_ PFLT_CALLBACK_DATA Data,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
+    _In_opt_ PVOID CompletionContext,
+    _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
     NTSTATUS status;
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     XDR_FILE_OP operation;
-    
+
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(Flags);
 
-    // Skip if the operation failed
     if (!NT_SUCCESS(Data->IoStatus.Status)) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Determine operation type
     if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileDispositionInformation) {
         operation = XDR_FILE_DELETE;
     } else if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation) {
@@ -577,27 +610,25 @@ XdrfsPostSetInformation(
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
-    // Get file name information
     status = XdrfsGetFileNameInformation(Data, FltObjects, &nameInfo);
     if (!NT_SUCCESS(status) || !nameInfo) {
         goto Cleanup;
     }
 
-    // Check if we should ignore this file
     if (XdrfsShouldIgnoreFile(&nameInfo->Name)) {
         goto Cleanup;
     }
 
-    // Generate file event
+    XdrfsWire_OnPostSetInformation(Data, FltObjects);
+
     XdrfsGenerateFileEvent(
-    XdrfsWire_OnPostSetInformation(nameInfo, Data->Iopb->Parameters.SetFileInformation.FileInformationClass, HandleToUlong(PsGetCurrentProcessId()), HandleToUlong(PsGetCurrentThreadId()));
-operation,
-                          nameInfo,
-                          0, // No create disposition
-                          0, // No file attributes
-                          0, // No file size
-                          HandleToUlong(PsGetCurrentProcessId()),
-                          HandleToUlong(PsGetCurrentThreadId()));
+        operation,
+        nameInfo,
+        0,
+        0,
+        0,
+        HandleToUlong(PsGetCurrentProcessId()),
+        HandleToUlong(PsGetCurrentThreadId()));
 
     XdrfsUpdateStatistics(operation);
 
