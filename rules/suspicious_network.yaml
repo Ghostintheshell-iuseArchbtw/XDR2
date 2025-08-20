@@ -1,0 +1,86 @@
+# Suspicious Network Activity Detection Rule
+# Detects suspicious outbound network connections
+
+id: "xdr-002-suspicious-network"
+name: "Suspicious Network Activity"
+description: "Detects outbound network connections to suspicious destinations or using suspicious patterns"
+author: "XDR Security Team"
+version: "1.0"
+enabled: true
+severity: "Medium"
+confidence: 0.75
+
+metadata:
+  attack:
+    techniques: ["T1071", "T1090", "T1573"]
+    tactics: ["Command and Control", "Exfiltration"]
+    matrix: "enterprise"
+  category: "network"
+  subcategory: "c2_communication"
+  cve: []
+  references:
+    - "https://attack.mitre.org/techniques/T1071/"
+  tags: ["network", "c2", "exfiltration", "suspicious"]
+  created: "2024-01-15"
+  modified: "2024-01-15"
+
+sources:
+  - "Network"
+
+conditions:
+  condition:
+    type: "And"
+    conditions:
+      - type: "Match"
+        field: "network.direction"
+        value: "outbound"
+        operator: "equals"
+      - type: "Or"
+        conditions:
+          - type: "Match"
+            field: "network.remote_address.port"
+            value: [80, 443, 8080, 8443, 53]
+            operator: "not_in"
+          - type: "Regex"
+            field: "network.remote_address.ip"
+            pattern: "^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"
+            flags: ""
+          - type: "Count"
+            condition:
+              type: "Match"
+              field: "network.remote_address.ip"
+              value: "*"
+              operator: "exists"
+            threshold: 10
+            timeframe: "1m"
+
+correlation:
+  key_fields: ["process.process_id"]
+  max_timespan: "30m"
+  min_events: 5
+  max_events: 100
+  correlation_type: "network_beaconing"
+  allow_partial: true
+
+false_positives:
+  - name: "Known legitimate services"
+    condition:
+      type: "In"
+      field: "process.image_name"
+      value: ["chrome.exe", "firefox.exe", "outlook.exe", "teams.exe", "zoom.exe"]
+      operator: "in"
+    confidence_reduction: 0.3
+
+output:
+  message: "Suspicious network activity from {process.image_path} to {network.remote_address.ip}:{network.remote_address.port}"
+  title: "Suspicious Network Connection"
+  description: "Process {process.image_path} established suspicious network connection"
+  include_raw_event: false
+  extract_fields:
+    - "network.remote_address.ip"
+    - "network.remote_address.port"
+    - "network.protocol"
+    - "process.image_path"
+  details:
+    category: "Network Anomaly"
+    risk_level: "Medium"

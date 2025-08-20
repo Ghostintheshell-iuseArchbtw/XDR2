@@ -1,0 +1,104 @@
+# Process Injection Detection Rule
+# Detects potential process injection techniques
+
+id: "xdr-001-process-injection"
+name: "Process Injection Detection"
+description: "Detects suspicious process injection activities including DLL injection and process hollowing"
+author: "XDR Security Team"
+version: "1.2"
+enabled: true
+severity: "High"
+confidence: 0.85
+
+metadata:
+  attack:
+    techniques: ["T1055", "T1055.001", "T1055.002"]
+    tactics: ["Defense Evasion", "Privilege Escalation"]
+    matrix: "enterprise"
+  category: "process_injection"
+  subcategory: "dll_injection"
+  cve: []
+  references:
+    - "https://attack.mitre.org/techniques/T1055/"
+    - "https://docs.microsoft.com/en-us/windows/win32/dlls/dynamic-link-libraries"
+  tags: ["injection", "evasion", "malware", "dll"]
+  created: "2024-01-15"
+  modified: "2024-01-20"
+
+sources:
+  - "Process"
+  - "Image"
+
+conditions:
+  condition:
+    type: "And"
+    conditions:
+      - type: "Match"
+        field: "process.operation"
+        value: "Create"
+        operator: "equals"
+      - type: "Or"
+        conditions:
+          - type: "Regex"
+            field: "process.command_line"
+            pattern: "(CreateRemoteThread|WriteProcessMemory|VirtualAllocEx|SetWindowsHookEx)"
+            flags: "i"
+          - type: "Match"
+            field: "process.image_path"
+            value: ".dll"
+            operator: "ends_with"
+  timeframe: "5m"
+  threshold: 2
+  group_by: ["process.parent_process_id", "process.session_id"]
+
+correlation:
+  key_fields: ["process.parent_process_id", "process.session_id"]
+  max_timespan: "10m"
+  min_events: 2
+  max_events: 50
+  correlation_type: "process_injection_chain"
+  allow_partial: false
+
+false_positives:
+  - name: "Legitimate system processes"
+    condition:
+      type: "Or"
+      conditions:
+        - type: "Match"
+          field: "process.image_path"
+          value: "C:\\Windows\\System32"
+          operator: "starts_with"
+        - type: "Match"
+          field: "process.image_path"
+          value: "C:\\Program Files"
+          operator: "starts_with"
+        - type: "Match"
+          field: "process.parent_image_path"
+          value: "services.exe"
+          operator: "ends_with"
+    confidence_reduction: 0.6
+
+  - name: "Known development tools"
+    condition:
+      type: "In"
+      field: "process.image_name"
+      value: ["devenv.exe", "msbuild.exe", "cl.exe", "link.exe", "regasm.exe"]
+      operator: "in"
+    confidence_reduction: 0.4
+
+output:
+  message: "Potential process injection detected on PID {event.process_id}: {process.image_path}"
+  title: "Process Injection Alert"
+  description: "Suspicious process injection activity detected involving {process.image_path} (PID: {event.process_id})"
+  include_raw_event: true
+  extract_fields:
+    - "process.image_path"
+    - "process.command_line"
+    - "process.parent_process_id"
+    - "process.parent_image_path"
+    - "process.session_id"
+  details:
+    technique: "Process Injection"
+    att_ck_technique: "T1055"
+    analysis_notes: "Monitor for follow-up activities from injected processes"
+    recommended_actions: "Isolate host, analyze process memory, check for persistence mechanisms"

@@ -1,0 +1,61 @@
+;
+; XDR WFP Callout Driver Installation Information File
+; Copyright (c) XDR Project. All rights reserved.
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+CatalogFile=xdrwfp.cat
+DriverVer=01/01/2024,1.0.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+xdrwfp.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%XdrWfp.DeviceDesc%=XdrWfp_Device, Root\XdrWfp
+
+[XdrWfp_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+xdrwfp.sys
+
+[XdrWfp_Device.NT.HW]
+AddReg=XdrWfp_Device.NT.AddReg
+
+[XdrWfp_Device.NT.AddReg]
+HKR,,DeviceCharacteristics,0x10001,0x0100         ; Use same security checks on relative opens
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"      ; Allow full control to system and admin
+
+[XdrWfp_Device.NT.Services]
+AddService = XdrWfp,%SPSVCINST_ASSOCSERVICE%, XdrWfp_Service_Inst
+
+[XdrWfp_Service_Inst]
+DisplayName    = %XdrWfp.SVCDESC%
+Description    = %XdrWfp.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\xdrwfp.sys
+LoadOrderGroup = NDIS
+Dependencies   = TCPIP
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="XDR Project"
+DiskName = "XDR WFP Callout Installation Disk"
+XdrWfp.DeviceDesc = "XDR WFP Network Monitor Driver"
+XdrWfp.SVCDESC = "XDR WFP Network Monitor Driver"

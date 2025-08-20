@@ -1,0 +1,77 @@
+;
+; XDR Core Driver Installation Information File
+; Copyright (c) XDR Project. All rights reserved.
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+CatalogFile=xdrk_core.cat
+DriverVer=01/01/2024,1.0.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+XdrCore_Device_CoInstaller_CopyFiles = 11
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+xdrk_core.sys = 1,,
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll = 1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%XdrCore.DeviceDesc%=XdrCore_Device, Root\XdrCore
+
+[XdrCore_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+xdrk_core.sys
+
+[XdrCore_Device.NT.HW]
+AddReg=XdrCore_Device.NT.AddReg
+
+[XdrCore_Device.NT.AddReg]
+HKR,,DeviceCharacteristics,0x10001,0x0100         ; Use same security checks on relative opens
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"      ; Allow full control to system and admin
+
+[XdrCore_Device.NT.Services]
+AddService = XdrCore,%SPSVCINST_ASSOCSERVICE%, XdrCore_Service_Inst
+
+[XdrCore_Service_Inst]
+DisplayName    = %XdrCore.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\xdrk_core.sys
+LoadOrderGroup = Extended Base
+
+[XdrCore_Device.NT.CoInstallers]
+AddReg=XdrCore_Device_CoInstaller_AddReg
+CopyFiles=XdrCore_Device_CoInstaller_CopyFiles
+
+[XdrCore_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[XdrCore_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[XdrCore_Device.NT.Wdf]
+KmdfService =  XdrCore, XdrCore_wdfsect
+
+[XdrCore_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="XDR Project"
+DiskName = "XDR Core Installation Disk"
+XdrCore.DeviceDesc = "XDR Core Telemetry Driver"
+XdrCore.SVCDESC = "XDR Core Telemetry Driver"

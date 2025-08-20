@@ -1,0 +1,74 @@
+;
+; XDR Filesystem Minifilter Installation Information File
+; Copyright (c) XDR Project. All rights reserved.
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ManufacturerName%
+DriverVer   = 01/01/2024,1.0.0.0
+CatalogFile = xdrfs.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir          = 12
+MiniFilter.DriverFiles  = 12            ; %windir%\system32\drivers
+MiniFilter.UserFiles    = 10,FltMgr     ; %windir%\FltMgr
+
+[DefaultInstall]
+OptionDesc          = %ServiceDescription%
+CopyFiles           = MiniFilter.DriverFiles, MiniFilter.UserFiles
+
+[DefaultInstall.Services]
+AddService          = %ServiceName%,,MiniFilter.Service
+
+[DefaultUninstall]
+DelFiles   = MiniFilter.DriverFiles, MiniFilter.UserFiles
+
+[DefaultUninstall.Services]
+DelService = %ServiceName%,0x200      ; Ensure service is stopped before uninstalling
+
+[MiniFilter.Service]
+DisplayName      = %ServiceName%
+Description      = %ServiceDescription%
+ServiceBinary    = %12%\%DriverName%.sys
+Dependencies     = "FltMgr"
+ServiceType      = 2                  ; SERVICE_FILE_SYSTEM_DRIVER
+StartType        = 3                  ; SERVICE_DEMAND_START
+ErrorControl     = 1                  ; SERVICE_ERROR_NORMAL
+LoadOrderGroup   = "FSFilter Activity Monitor"
+AddReg           = MiniFilter.AddRegistry
+
+[MiniFilter.AddRegistry]
+HKR,,"SupportedFeatures",0x00010001,0x3
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[MiniFilter.DriverFiles]
+%DriverName%.sys
+
+[MiniFilter.UserFiles]
+; No user-mode files for this driver
+
+[SourceDisksFiles]
+xdrfs.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
+; Instances specific information
+[Strings]
+ManufacturerName        = "XDR Project"
+ServiceDescription      = "XDR Filesystem Activity Monitor"
+ServiceName             = "XdrFs"
+DriverName              = "xdrfs"
+DiskId1                 = "XDR Filesystem Minifilter Installation Disk"
+
+; Instances
+DefaultInstance         = "XdrFs - Top Instance"
+Instance1.Name          = "XdrFs - Top Instance"
+Instance1.Altitude      = "385200"
+Instance1.Flags         = 0x1          ; FLTFL_INSTANCE_SETUP_AUTOMATIC_ATTACHMENT

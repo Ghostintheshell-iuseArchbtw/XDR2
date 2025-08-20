@@ -1,0 +1,144 @@
+[package]
+name = "xdr-userland"
+version = "0.1.0"
+edition = "2021"
+authors = ["XDR Project"]
+description = "XDR endpoint detection and response userland service"
+license = "MIT"
+
+[workspace]
+members = [
+    ".",
+]
+
+[[bin]]
+name = "xdr_service"
+path = "src/bin/xdr_service.rs"
+
+[[bin]]
+name = "xdr_cli"
+path = "src/bin/xdr_cli.rs"
+
+[dependencies]
+# Windows APIs
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_IO",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Console",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+] }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# Time and date handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cryptography
+sha2 = "0.10"
+hex = "0.4"
+
+# Database
+rusqlite = { version = "0.30", features = ["bundled", "chrono", "serde_json"] }
+
+# Configuration
+config = "0.14"
+
+# CLI
+clap = { version = "4.4", features = ["derive", "color"] }
+
+# Regex
+regex = "1.10"
+
+# Network utilities
+cidr = "0.2"
+
+# Service framework for Windows
+windows-service = "0.6"
+
+# Memory mapping
+memmap2 = "0.9"
+
+# Atomic types
+crossbeam = "0.8"
+
+# String utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Performance monitoring
+once_cell = "1.19"
+
+# File watching
+notify = "6.1"
+
+# Process utilities  
+sysinfo = "0.30"
+
+# CPU detection
+num_cpus = "1.16"
+
+# Random number generation
+rand = "0.8"
+
+# Event correlation
+petgraph = "0.6"
+
+# Compression for log rotation
+flate2 = "1.0"
+
+# Windows authentication
+ntapi = "0.4"
+
+[build-dependencies]
+bindgen = "0.69"
+cc = "1.0"
+
+[features]
+default = ["full"]
+full = ["etw", "authenticode", "wmi"]
+etw = []
+authenticode = []
+wmi = []
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+[package.metadata.windows.target]
+subsystem = "console"
