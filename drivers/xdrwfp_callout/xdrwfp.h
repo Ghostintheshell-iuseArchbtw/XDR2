@@ -119,6 +119,9 @@ typedef struct _XDRWFP_DATA {
     KTIMER StatsTimer;
     KDPC StatsDpc;
     BOOLEAN TimerActive;
+
+    // Shutdown coordination
+    BOOLEAN Stopping;
     
 } XDRWFP_DATA, *PXDRWFP_DATA;
 

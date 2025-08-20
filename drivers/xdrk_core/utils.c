@@ -22,7 +22,7 @@ XdrCreateSecurityDescriptor(
     // Calculate size needed for security descriptor
     size = sizeof(SECURITY_DESCRIPTOR) + 256; // Extra space for ACL
 
-    sd = ExAllocatePoolWithTag(PagedPool, size, XDR_POOL_TAG);
+    sd = ExAllocatePoolWithTag(NonPagedPoolNx, size, XDR_POOL_TAG);
     if (!sd) {
         LogError(STATUS_INSUFFICIENT_RESOURCES, "Failed to allocate security descriptor");
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -72,7 +72,7 @@ XdrGetProcessImagePath(
         return status;
     }
 
-    processImageFileName = ExAllocatePoolWithTag(PagedPool, returnedLength, XDR_POOL_TAG);
+    processImageFileName = ExAllocatePoolWithTag(NonPagedPoolNx, returnedLength, XDR_POOL_TAG);
     if (!processImageFileName) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -86,7 +86,7 @@ XdrGetProcessImagePath(
     if (NT_SUCCESS(status)) {
         ImagePath->Length = processImageFileName->Length;
         ImagePath->MaximumLength = processImageFileName->MaximumLength;
-        ImagePath->Buffer = ExAllocatePoolWithTag(PagedPool, 
+        ImagePath->Buffer = ExAllocatePoolWithTag(NonPagedPoolNx,
                                                 processImageFileName->MaximumLength, 
                                                 XDR_POOL_TAG);
         
@@ -138,7 +138,7 @@ XdrGetProcessCommandLine(
         return STATUS_SUCCESS;
     }
 
-    commandLine = ExAllocatePoolWithTag(PagedPool, returnedLength, XDR_POOL_TAG);
+    commandLine = ExAllocatePoolWithTag(NonPagedPoolNx, returnedLength, XDR_POOL_TAG);
     if (!commandLine) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -282,7 +282,7 @@ XdrGetRegistryKeyPath(
         return status;
     }
 
-    nameInfo = ExAllocatePoolWithTag(PagedPool, returnedLength, XDR_POOL_TAG);
+    nameInfo = ExAllocatePoolWithTag(NonPagedPoolNx, returnedLength, XDR_POOL_TAG);
     if (!nameInfo) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -295,7 +295,7 @@ XdrGetRegistryKeyPath(
     if (NT_SUCCESS(status)) {
         KeyPath->Length = nameInfo->Name.Length;
         KeyPath->MaximumLength = nameInfo->Name.MaximumLength;
-        KeyPath->Buffer = ExAllocatePoolWithTag(PagedPool, 
+        KeyPath->Buffer = ExAllocatePoolWithTag(NonPagedPoolNx,
                                               nameInfo->Name.MaximumLength, 
                                               XDR_POOL_TAG);
         

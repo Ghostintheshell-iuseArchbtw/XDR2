@@ -5,6 +5,42 @@
 
 #include "xdrwfp.h"
 
+typedef struct _XDRWFP_EVENT_WORK_ITEM {
+    WORK_QUEUE_ITEM WorkItem;
+    PXDR_EVENT_RECORD EventRecord;
+} XDRWFP_EVENT_WORK_ITEM, *PXDRWFP_EVENT_WORK_ITEM;
+
+static VOID XdrwfpPublishEventWorker(_In_ PVOID Context)
+{
+    PXDRWFP_EVENT_WORK_ITEM work = (PXDRWFP_EVENT_WORK_ITEM)Context;
+    if (work && work->EventRecord) {
+        (void)XdrwfpPublishEventToCore(work->EventRecord);
+        ExFreePoolWithTag(work->EventRecord, XDRWFP_POOL_TAG);
+    }
+    ExFreePoolWithTag(work, XDRWFP_POOL_TAG);
+}
+
+static NTSTATUS XdrwfpQueueEvent(_In_ PXDR_EVENT_RECORD EventRecord)
+{
+    PXDRWFP_EVENT_WORK_ITEM work;
+
+    if (g_WfpData.Stopping) {
+        ExFreePoolWithTag(EventRecord, XDRWFP_POOL_TAG);
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    work = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*work), XDRWFP_POOL_TAG);
+    if (!work) {
+        ExFreePoolWithTag(EventRecord, XDRWFP_POOL_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    work->EventRecord = EventRecord;
+    ExInitializeWorkItem(&work->WorkItem, XdrwfpPublishEventWorker, work);
+    ExQueueWorkItem(&work->WorkItem, DelayedWorkQueue);
+    return STATUS_SUCCESS;
+}
+
 //
 // Create flow context
 //
@@ -28,7 +64,7 @@ XdrwfpCreateFlowContext(
     }
 
     // Allocate flow context
-    flowCtx = ExAllocatePoolWithTag(NonPagedPool, sizeof(XDRWFP_FLOW_CONTEXT), XDRWFP_FLOW_TAG);
+    flowCtx = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(XDRWFP_FLOW_CONTEXT), XDRWFP_FLOW_TAG);
     if (!flowCtx) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -189,39 +225,42 @@ XdrwfpGenerateNetworkEvent(
     _In_opt_ PXDRWFP_FLOW_CONTEXT FlowContext
 )
 {
-    XDR_EVENT_RECORD eventRecord;
+    PXDR_EVENT_RECORD eventRecord;
     XDR_NETWORK_EVENT* networkEvent;
     LARGE_INTEGER timestamp;
 
-    // Initialize event record
-    RtlZeroMemory(&eventRecord, sizeof(eventRecord));
-    eventRecord.total_size = sizeof(XDR_EVENT_RECORD);
-
-    // Fill header
-    eventRecord.header.version = XDR_ABI_VERSION;
-    eventRecord.header.source = XDR_SOURCE_NETWORK;
-    eventRecord.header.severity = (Verdict == XDR_NET_BLOCK) ? XDR_SEVERITY_HIGH : XDR_SEVERITY_LOW;
-
-    KeQuerySystemTimePrecise(&timestamp);
-    eventRecord.header.timestamp_100ns = timestamp.QuadPart;
-
-    // Get process information
-    if (InMetaValues && FWPS_IS_METADATA_FIELD_PRESENT(InMetaValues, FWPS_METADATA_FIELD_PROCESS_ID)) {
-        eventRecord.header.process_id = (UINT32)InMetaValues->processId;
-    } else if (FlowContext) {
-        eventRecord.header.process_id = FlowContext->ProcessId;
+    if (g_WfpData.Stopping) {
+        return STATUS_DEVICE_NOT_READY;
     }
 
-    // Sequence number
-    eventRecord.header.sequence_number = InterlockedIncrement64(&g_WfpData.TotalFlows);
+    eventRecord = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(XDR_EVENT_RECORD), XDRWFP_POOL_TAG);
+    if (!eventRecord) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
-    // Fill network event payload
-    networkEvent = &eventRecord.payload.network;
+    RtlZeroMemory(eventRecord, sizeof(XDR_EVENT_RECORD));
+    eventRecord->total_size = sizeof(XDR_EVENT_RECORD);
+
+    eventRecord->header.version = XDR_ABI_VERSION;
+    eventRecord->header.source = XDR_SOURCE_NETWORK;
+    eventRecord->header.severity = (Verdict == XDR_NET_BLOCK) ? XDR_SEVERITY_HIGH : XDR_SEVERITY_LOW;
+
+    KeQuerySystemTimePrecise(&timestamp);
+    eventRecord->header.timestamp_100ns = timestamp.QuadPart;
+
+    if (InMetaValues && FWPS_IS_METADATA_FIELD_PRESENT(InMetaValues, FWPS_METADATA_FIELD_PROCESS_ID)) {
+        eventRecord->header.process_id = (UINT32)InMetaValues->processId;
+    } else if (FlowContext) {
+        eventRecord->header.process_id = FlowContext->ProcessId;
+    }
+
+    eventRecord->header.sequence_number = InterlockedIncrement64(&g_WfpData.TotalFlows);
+
+    networkEvent = &eventRecord->payload.network;
     networkEvent->operation = Operation;
     networkEvent->verdict = Verdict;
 
     if (FlowContext) {
-        // Use flow context information
         networkEvent->protocol = FlowContext->Protocol;
         networkEvent->direction = FlowContext->IsInbound ? 1 : 0;
         networkEvent->bytes_sent = FlowContext->BytesSent;
@@ -233,36 +272,21 @@ XdrwfpGenerateNetworkEvent(
             RtlCopyMemory(networkEvent->remote_addr_v6, FlowContext->RemoteAddrV6, 16);
             networkEvent->local_port = FlowContext->LocalPort;
             networkEvent->remote_port = FlowContext->RemotePort;
+            eventRecord->header.key_hash = 0;
         } else {
             networkEvent->local_addr = FlowContext->LocalAddrV4;
             networkEvent->remote_addr = FlowContext->RemoteAddrV4;
             networkEvent->local_port = FlowContext->LocalPort;
             networkEvent->remote_port = FlowContext->RemotePort;
-        }
-
-        // Compute key hash based on 5-tuple
-        if (FlowContext->IsIPv6) {
-            eventRecord.header.key_hash = 0; // Simplified
-        } else {
-            UINT64 tupleData[3];
-            tupleData[0] = ((UINT64)FlowContext->LocalAddrV4 << 32) | FlowContext->RemoteAddrV4;
-            tupleData[1] = ((UINT64)FlowContext->LocalPort << 16) | FlowContext->RemotePort;
-            tupleData[2] = FlowContext->Protocol;
-            
-            // Simple hash
-            eventRecord.header.key_hash = tupleData[0] ^ tupleData[1] ^ tupleData[2];
+            eventRecord->header.key_hash = ((UINT64)FlowContext->LocalAddrV4 << 32) | FlowContext->RemoteAddrV4;
         }
     } else if (InFixedValues && InMetaValues) {
-        // Extract information directly from WFP values
         XdrwfpExtractNetworkInfo(InFixedValues, InMetaValues, networkEvent);
-        
-        // Compute simple key hash
-        eventRecord.header.key_hash = ((UINT64)networkEvent->local_addr << 32) | 
-                                     networkEvent->remote_addr;
+        eventRecord->header.key_hash = ((UINT64)networkEvent->local_addr << 32) |
+                                       networkEvent->remote_addr;
     }
 
-    // Send to core driver
-    return XdrwfpPublishEventToCore(&eventRecord);
+    return XdrwfpQueueEvent(eventRecord);
 }
 
 //

@@ -66,7 +66,8 @@ typedef struct _XDRFS_DATA {
     PDEVICE_OBJECT CoreDeviceObject;
     PFILE_OBJECT CoreFileObject;
     BOOLEAN Connected;
-    FAST_MUTEX ConnectionLock;
+    KSPIN_LOCK ConnectionLock;
+    BOOLEAN Stopping;
     
     // Statistics
     LONG64 TotalEvents;
