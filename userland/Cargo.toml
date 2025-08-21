@@ -126,6 +126,7 @@ full = ["etw", "authenticode", "wmi"]
 etw = []
 authenticode = []
 wmi = []
+rules-engine = []
 
 [profile.release]
 opt-level = 3
