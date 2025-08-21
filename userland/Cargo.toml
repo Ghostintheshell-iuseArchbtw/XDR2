@@ -20,26 +20,6 @@ name = "xdr_cli"
 path = "src/bin/xdr_cli.rs"
 
 [dependencies]
-# Windows APIs
-windows = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_IO",
-    "Win32_System_Services",
-    "Win32_System_Threading",
-    "Win32_System_Memory",
-    "Win32_System_ProcessStatus",
-    "Win32_System_SystemInformation",
-    "Win32_System_Registry",
-    "Win32_Security",
-    "Win32_Networking_WinSock",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Console",
-    "Win32_System_WindowsProgramming",
-    "Win32_System_Environment",
-    "Win32_System_LibraryLoader",
-] }
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -80,8 +60,6 @@ regex = "1.10"
 # Network utilities
 cidr = "0.2"
 
-# Service framework for Windows
-windows-service = "0.6"
 
 # Memory mapping
 memmap2 = "0.9"
@@ -113,6 +91,29 @@ petgraph = "0.6"
 # Compression for log rotation
 flate2 = "1.0"
 
+[target.'cfg(windows)'.dependencies]
+# Windows APIs
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_IO",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Console",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+] }
+# Service framework for Windows
+windows-service = "0.6"
 # Windows authentication
 ntapi = "0.4"
 

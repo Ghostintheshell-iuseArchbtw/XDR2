@@ -80,7 +80,7 @@ false_positives:
 
   - name: "Known development tools"
     condition:
-      type: "In"
+      type: "Match"
       field: "process.image_name"
       value: ["devenv.exe", "msbuild.exe", "cl.exe", "link.exe", "regasm.exe"]
       operator: "in"
