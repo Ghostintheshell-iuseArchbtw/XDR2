@@ -3,12 +3,16 @@
 //! Implements YAML-based rule definition and evaluation engine with event correlation.
 //! Supports real-time rule execution, correlation windows, and alert generation.
 
+#[cfg(feature = "rules-engine")]
 mod correlation;
+#[cfg(feature = "rules-engine")]
 mod engine;
 mod parser;
 mod schema;
 
+#[cfg(feature = "rules-engine")]
 pub use correlation::*;
+#[cfg(feature = "rules-engine")]
 pub use engine::*;
 pub use parser::*;
 pub use schema::*;

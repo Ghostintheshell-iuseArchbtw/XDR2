@@ -433,12 +433,14 @@ impl Default for RuleExecutionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EventSource, Severity};
+    use crate::events::{EventData, EventEnvelope, EventSource, ProcessEvent, ProcessOperation, Severity};
+    use chrono::Utc;
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     fn create_test_event() -> EventEnvelope {
         EventEnvelope {
-            id: "test-event-001".to_string(),
+            id: Uuid::new_v4(),
             source: EventSource::Process,
             severity: Severity::Medium,
             timestamp: Utc::now(),
@@ -448,9 +450,18 @@ mod tests {
             sequence_number: 42,
             prev_sequence_number: 41,
             key_hash: 0x12345678,
-            flags: "0x00000001".to_string(),
-            data: r#"{"process":{"operation":"Create","image_path":"C:\\Windows\\System32\\notepad.exe","command_line":"notepad.exe test.txt"}}"#.to_string(),
-            metadata: r#"{}"#.to_string(),
+            flags: vec!["0x00000001".to_string()],
+            data: EventData::Process(ProcessEvent {
+                operation: ProcessOperation::Create,
+                parent_process_id: None,
+                image_path: "C:\\Windows\\System32\\notepad.exe".to_string(),
+                command_line_hash: None,
+                integrity_level: None,
+                token_flags: None,
+                sid_hash: None,
+                exit_code: None,
+            }),
+            metadata: HashMap::new(),
         }
     }
 
