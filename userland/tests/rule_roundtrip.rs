@@ -8,6 +8,7 @@ fn rule_yaml_roundtrip() {
         if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
             continue;
         }
+
         let rule = match parser.parse_file(&path) {
             Ok(r) => r,
             Err(e) => {
@@ -29,6 +30,7 @@ fn rule_yaml_roundtrip() {
                 continue;
             }
         };
+
         let v1 = serde_yaml::to_value(&rule).expect("value1");
         let v2 = serde_yaml::to_value(&reparsed).expect("value2");
         assert_eq!(v1, v2, "roundtrip mismatch for {:?}", path);
