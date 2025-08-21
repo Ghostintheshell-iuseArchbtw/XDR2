@@ -1,8 +1,8 @@
 //! Rule Schema Definitions
-//! 
+//!
 //! Defines the YAML schema structure for XDR detection rules.
 
-use crate::events::{EventSource, Severity};
+use crate::types::{EventSource, Severity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,22 +18,22 @@ pub struct Rule {
     pub enabled: bool,
     pub severity: Severity,
     pub confidence: f32,
-    
+
     /// Rule metadata
     pub metadata: RuleMetadata,
-    
+
     /// Event sources this rule applies to
     pub sources: Vec<EventSource>,
-    
+
     /// Rule conditions
     pub conditions: RuleConditions,
-    
+
     /// Correlation settings
     pub correlation: Option<CorrelationConfig>,
-    
+
     /// False positive filters
     pub false_positives: Vec<FalsePositiveFilter>,
-    
+
     /// Rule output configuration
     pub output: RuleOutput,
 }
@@ -43,25 +43,25 @@ pub struct Rule {
 pub struct RuleMetadata {
     /// ATT&CK framework references
     pub attack: Option<AttackMapping>,
-    
+
     /// Rule category (e.g., "malware", "persistence", "lateral_movement")
     pub category: String,
-    
+
     /// Sub-category for more specific classification
     pub subcategory: Option<String>,
-    
+
     /// Associated CVE numbers
     pub cve: Vec<String>,
-    
+
     /// Reference URLs for additional context
     pub references: Vec<String>,
-    
+
     /// Tags for flexible classification
     pub tags: Vec<String>,
-    
+
     /// Rule creation date
     pub created: String,
-    
+
     /// Last modification date
     pub modified: String,
 }
@@ -71,10 +71,10 @@ pub struct RuleMetadata {
 pub struct AttackMapping {
     /// ATT&CK technique IDs (e.g., "T1055")
     pub techniques: Vec<String>,
-    
+
     /// ATT&CK tactic names (e.g., "Defense Evasion")
     pub tactics: Vec<String>,
-    
+
     /// ATT&CK matrix (e.g., "enterprise", "mobile", "ics")
     pub matrix: String,
 }
@@ -84,13 +84,14 @@ pub struct AttackMapping {
 pub struct RuleConditions {
     /// Primary condition that must be satisfied
     pub condition: Condition,
-    
+
     /// Time window for evaluating conditions
+    #[serde(default, with = "duration_serde::option")]
     pub timeframe: Option<Duration>,
-    
+
     /// Minimum event count threshold
     pub threshold: Option<u32>,
-    
+
     /// Group by fields for aggregation
     pub group_by: Vec<String>,
 }
@@ -105,52 +106,51 @@ pub enum Condition {
         value: ConditionValue,
         operator: MatchOperator,
     },
-    
+
     /// Regular expression matching
     Regex {
         field: String,
         pattern: String,
         flags: Option<String>,
     },
-    
+
     /// Logical combination of conditions
-    And {
-        conditions: Vec<Condition>,
-    },
-    
+    And { conditions: Vec<Condition> },
+
     /// Logical OR of conditions
-    Or {
-        conditions: Vec<Condition>,
-    },
-    
+    Or { conditions: Vec<Condition> },
+
     /// Negation of a condition
-    Not {
-        condition: Box<Condition>,
-    },
-    
+    Not { condition: Box<Condition> },
+
     /// Time-based condition
     Temporal {
         condition: Box<Condition>,
+        #[serde(with = "duration_serde")]
         within: Duration,
     },
-    
+
     /// Count-based condition
     Count {
         condition: Box<Condition>,
         threshold: u32,
+        #[serde(with = "duration_serde")]
         timeframe: Duration,
     },
-    
+
     /// Sequence detection
     Sequence {
         conditions: Vec<Condition>,
+        #[serde(with = "duration_serde")]
         max_timespan: Duration,
     },
-    
+
     /// Statistical anomaly detection
     Anomaly {
         field: String,
+        #[serde(with = "duration_serde")]
         baseline_window: Duration,
+        #[serde(with = "duration_serde")]
         detection_window: Duration,
         threshold_sigma: f64,
     },
@@ -205,19 +205,20 @@ pub enum MatchOperator {
 pub struct CorrelationConfig {
     /// Correlation key fields for grouping related events
     pub key_fields: Vec<String>,
-    
+
     /// Maximum time window for correlation
+    #[serde(with = "duration_serde")]
     pub max_timespan: Duration,
-    
+
     /// Minimum number of events required for correlation
     pub min_events: u32,
-    
+
     /// Maximum number of events in correlation window
     pub max_events: Option<u32>,
-    
+
     /// Correlation type identifier
     pub correlation_type: String,
-    
+
     /// Whether to create alerts for partial correlations
     pub allow_partial: bool,
 }
@@ -227,10 +228,10 @@ pub struct CorrelationConfig {
 pub struct FalsePositiveFilter {
     /// Filter name for documentation
     pub name: String,
-    
+
     /// Condition that identifies false positives
     pub condition: Condition,
-    
+
     /// Confidence reduction factor (0.0 to 1.0)
     pub confidence_reduction: f32,
 }
@@ -240,19 +241,19 @@ pub struct FalsePositiveFilter {
 pub struct RuleOutput {
     /// Alert message template
     pub message: String,
-    
+
     /// Additional details to include in alert
     pub details: HashMap<String, String>,
-    
+
     /// Whether to include raw event data
     pub include_raw_event: bool,
-    
+
     /// Custom fields to extract from events
     pub extract_fields: Vec<String>,
-    
+
     /// Alert title template
     pub title: Option<String>,
-    
+
     /// Alert description template
     pub description: Option<String>,
 }
@@ -279,43 +280,49 @@ mod duration_serde {
     }
 
     pub fn parse_duration(s: &str) -> Result<Duration, String> {
-        if s.ends_with('s') {
-            let num_str = &s[..s.len() - 1];
-            let seconds: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
-            Ok(Duration::from_secs(seconds))
-        } else if s.ends_with('m') {
-            let num_str = &s[..s.len() - 1];
-            let minutes: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
-            Ok(Duration::from_secs(minutes * 60))
-        } else if s.ends_with('h') {
-            let num_str = &s[..s.len() - 1];
-            let hours: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
-            Ok(Duration::from_secs(hours * 3600))
-        } else if s.ends_with("ms") {
-            let num_str = &s[..s.len() - 2];
+        if let Some(num_str) = s.strip_suffix("ms") {
             let millis: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
             Ok(Duration::from_millis(millis))
+        } else if let Some(num_str) = s.strip_suffix('s') {
+            let seconds: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
+            Ok(Duration::from_secs(seconds))
+        } else if let Some(num_str) = s.strip_suffix('m') {
+            let minutes: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
+            Ok(Duration::from_secs(minutes * 60))
+        } else if let Some(num_str) = s.strip_suffix('h') {
+            let hours: u64 = num_str.parse().map_err(|_| "Invalid duration format")?;
+            Ok(Duration::from_secs(hours * 3600))
         } else {
             Err("Duration must end with 's', 'm', 'h', or 'ms'".to_string())
         }
     }
-}
 
-impl<'de> Deserialize<'de> for Duration {
-    fn deserialize<D>(deserializer: D) -> Result<Duration, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        duration_serde::deserialize(deserializer)
-    }
-}
+    pub mod option {
+        use super::*;
+        use serde::{Deserialize, Deserializer, Serializer};
 
-impl Serialize for Duration {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        duration_serde::serialize(self, serializer)
+        pub fn serialize<S>(duration: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match duration {
+                Some(d) => super::serialize(d, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let opt = Option::<String>::deserialize(deserializer)?;
+            match opt {
+                Some(s) => super::parse_duration(&s)
+                    .map(Some)
+                    .map_err(serde::de::Error::custom),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -325,10 +332,22 @@ mod tests {
 
     #[test]
     fn test_duration_parsing() {
-        assert_eq!(duration_serde::parse_duration("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(duration_serde::parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(duration_serde::parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert_eq!(duration_serde::parse_duration("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(
+            duration_serde::parse_duration("30s").unwrap(),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            duration_serde::parse_duration("5m").unwrap(),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            duration_serde::parse_duration("2h").unwrap(),
+            Duration::from_secs(7200)
+        );
+        assert_eq!(
+            duration_serde::parse_duration("500ms").unwrap(),
+            Duration::from_millis(500)
+        );
     }
 
     #[test]

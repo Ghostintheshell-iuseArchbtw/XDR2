@@ -1,28 +1,16 @@
 //! Event Processing Module
-//! 
+//!
 //! Provides high-level event handling, normalization, and correlation
 //! for events received from the kernel driver.
 
 use crate::ffi;
+use crate::types::{EventSource, Severity};
 use crate::{filetime_to_datetime, LibResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use uuid::Uuid;
-
-/// High-level event source enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum EventSource {
-    Process,
-    Thread, 
-    Image,
-    Registry,
-    File,
-    Network,
-    Heartbeat,
-    User,
-}
 
 impl From<u16> for EventSource {
     fn from(value: u16) -> Self {
@@ -55,15 +43,6 @@ impl fmt::Display for EventSource {
     }
 }
 
-/// Event severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Severity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
 impl From<u16> for Severity {
     fn from(value: u16) -> Self {
         match value {
@@ -92,40 +71,40 @@ impl fmt::Display for Severity {
 pub struct EventEnvelope {
     /// Unique event ID
     pub id: Uuid,
-    
+
     /// Event source
     pub source: EventSource,
-    
+
     /// Event severity
     pub severity: Severity,
-    
+
     /// Event timestamp
     pub timestamp: DateTime<Utc>,
-    
+
     /// Process ID
     pub process_id: u32,
-    
+
     /// Thread ID  
     pub thread_id: u32,
-    
+
     /// Session ID
     pub session_id: u32,
-    
+
     /// Sequence number from driver
     pub sequence_number: u64,
-    
+
     /// Previous sequence number for same key (for correlation)
     pub prev_sequence_number: u64,
-    
+
     /// Stable key hash for correlation
     pub key_hash: u64,
-    
+
     /// Event flags
     pub flags: Vec<String>,
-    
+
     /// Event-specific data
     pub data: EventData,
-    
+
     /// Additional metadata
     pub metadata: HashMap<String, serde_json::Value>,
 }
@@ -336,7 +315,10 @@ impl EventProcessor {
 
         // Create metadata
         let mut metadata = HashMap::new();
-        metadata.insert("raw_size".to_string(), serde_json::Value::Number(raw_event.total_size.into()));
+        metadata.insert(
+            "raw_size".to_string(),
+            serde_json::Value::Number(raw_event.total_size.into()),
+        );
 
         Ok(EventEnvelope {
             id: Uuid::new_v4(),
@@ -356,7 +338,11 @@ impl EventProcessor {
     }
 
     /// Process event data based on source type
-    fn process_event_data(&self, source: EventSource, payload: &ffi::XDR_EVENT_PAYLOAD) -> LibResult<EventData> {
+    fn process_event_data(
+        &self,
+        source: EventSource,
+        payload: &ffi::XDR_EVENT_PAYLOAD,
+    ) -> LibResult<EventData> {
         match source {
             EventSource::Process => {
                 let proc_event = unsafe { &payload.process };
@@ -442,7 +428,11 @@ impl EventProcessor {
                     },
                     publisher: {
                         let pub_str = self.convert_wide_string(&image_event.publisher);
-                        if pub_str.is_empty() { None } else { Some(pub_str) }
+                        if pub_str.is_empty() {
+                            None
+                        } else {
+                            Some(pub_str)
+                        }
                     },
                     timestamp: if image_event.timestamp != 0 {
                         Some(filetime_to_datetime(image_event.timestamp))
@@ -467,7 +457,11 @@ impl EventProcessor {
                     key_path: self.convert_wide_string(&reg_event.key_path),
                     value_name: {
                         let val_str = self.convert_wide_string(&reg_event.value_name);
-                        if val_str.is_empty() { None } else { Some(val_str) }
+                        if val_str.is_empty() {
+                            None
+                        } else {
+                            Some(val_str)
+                        }
                     },
                     value_type: if reg_event.value_type != 0 {
                         Some(reg_event.value_type)
@@ -501,7 +495,11 @@ impl EventProcessor {
                     file_path: self.convert_wide_string(&file_event.file_path),
                     file_extension: {
                         let ext_str = self.convert_wide_string(&file_event.file_extension);
-                        if ext_str.is_empty() { None } else { Some(ext_str) }
+                        if ext_str.is_empty() {
+                            None
+                        } else {
+                            Some(ext_str)
+                        }
                     },
                     create_disposition: if file_event.create_disposition != 0 {
                         Some(file_event.create_disposition)
@@ -528,19 +526,23 @@ impl EventProcessor {
 
             EventSource::Network => {
                 let net_event = unsafe { &payload.network };
-                
+
                 // Determine IP addresses
                 let local_ip = if net_event.local_addr != 0 {
-                    std::net::IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(net_event.local_addr)))
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
+                        net_event.local_addr,
+                    )))
                 } else {
                     // Try IPv6
                     std::net::IpAddr::V6(std::net::Ipv6Addr::from(net_event.local_addr_v6))
                 };
 
                 let remote_ip = if net_event.remote_addr != 0 {
-                    std::net::IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(net_event.remote_addr)))
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::from(u32::from_be(
+                        net_event.remote_addr,
+                    )))
                 } else {
-                    // Try IPv6  
+                    // Try IPv6
                     std::net::IpAddr::V6(std::net::Ipv6Addr::from(net_event.remote_addr_v6))
                 };
 
@@ -593,7 +595,7 @@ impl EventProcessor {
 
             EventSource::Heartbeat => {
                 let hb_event = unsafe { &payload.heartbeat };
-                
+
                 let mut drops_map = HashMap::new();
                 for (i, &count) in hb_event.drops_by_source.iter().enumerate() {
                     if i < ffi::XDR_SOURCE_MAX as usize {
@@ -625,8 +627,11 @@ impl EventProcessor {
     /// Convert a wide string (UTF-16) to String
     fn convert_wide_string(&self, wide_chars: &[u16]) -> String {
         // Find null terminator
-        let end_pos = wide_chars.iter().position(|&c| c == 0).unwrap_or(wide_chars.len());
-        
+        let end_pos = wide_chars
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(wide_chars.len());
+
         // Convert to String
         String::from_utf16(&wide_chars[..end_pos]).unwrap_or_else(|_| {
             // Fallback for invalid UTF-16
@@ -647,7 +652,10 @@ mod tests {
 
     #[test]
     fn test_event_source_conversion() {
-        assert_eq!(EventSource::from(ffi::XDR_SOURCE_PROCESS), EventSource::Process);
+        assert_eq!(
+            EventSource::from(ffi::XDR_SOURCE_PROCESS),
+            EventSource::Process
+        );
         assert_eq!(EventSource::from(ffi::XDR_SOURCE_FILE), EventSource::File);
         assert_eq!(EventSource::from(999), EventSource::User); // Fallback
     }
@@ -655,7 +663,10 @@ mod tests {
     #[test]
     fn test_severity_conversion() {
         assert_eq!(Severity::from(ffi::XDR_SEVERITY_LOW), Severity::Low);
-        assert_eq!(Severity::from(ffi::XDR_SEVERITY_CRITICAL), Severity::Critical);
+        assert_eq!(
+            Severity::from(ffi::XDR_SEVERITY_CRITICAL),
+            Severity::Critical
+        );
         assert_eq!(Severity::from(999), Severity::Low); // Fallback
     }
 

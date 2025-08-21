@@ -1,31 +1,36 @@
 //! Rules Engine Module
-//! 
+//!
 //! Implements YAML-based rule definition and evaluation engine with event correlation.
 //! Supports real-time rule execution, correlation windows, and alert generation.
 
-#[cfg(feature = "rules-engine")]
+#[cfg(all(feature = "rules-engine", windows))]
 mod correlation;
-#[cfg(feature = "rules-engine")]
+#[cfg(all(feature = "rules-engine", windows))]
 mod engine;
 mod parser;
 mod schema;
 
-#[cfg(feature = "rules-engine")]
+#[cfg(all(feature = "rules-engine", windows))]
 pub use correlation::*;
-#[cfg(feature = "rules-engine")]
+#[cfg(all(feature = "rules-engine", windows))]
 pub use engine::*;
 pub use parser::*;
 pub use schema::*;
 
-use crate::events::{EventEnvelope, EventSource, Severity};
+#[cfg(all(feature = "rules-engine", windows))]
+use crate::events::EventEnvelope;
+use crate::types::Severity;
+#[cfg(all(feature = "rules-engine", windows))]
 use crate::LibResult;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+#[cfg(all(feature = "rules-engine", windows))]
 use std::collections::HashMap;
+#[cfg(all(feature = "rules-engine", windows))]
 use std::path::PathBuf;
+#[cfg(all(feature = "rules-engine", windows))]
 use std::time::Duration;
 use thiserror::Error;
-use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum RulesError {
@@ -59,6 +64,7 @@ pub struct RuleMatch {
     pub timestamp: DateTime<Utc>,
 }
 
+#[cfg(all(feature = "rules-engine", windows))]
 /// Rule execution statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuleStats {
@@ -71,6 +77,7 @@ pub struct RuleStats {
     pub enabled: bool,
 }
 
+#[cfg(all(feature = "rules-engine", windows))]
 /// Alert aggregation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
@@ -87,6 +94,7 @@ pub struct Alert {
     pub analyst_notes: Option<String>,
 }
 
+#[cfg(all(feature = "rules-engine", windows))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AlertStatus {
     Open,
@@ -95,6 +103,7 @@ pub enum AlertStatus {
     FalsePositive,
 }
 
+#[cfg(all(feature = "rules-engine", windows))]
 /// Main rules engine
 pub struct RulesEngine {
     rules_directory: PathBuf,
@@ -104,6 +113,7 @@ pub struct RulesEngine {
     enabled: bool,
 }
 
+#[cfg(all(feature = "rules-engine", windows))]
 impl RulesEngine {
     /// Create a new rules engine
     pub fn new(rules_directory: PathBuf) -> Self {
@@ -127,18 +137,18 @@ impl RulesEngine {
         self.stats.clear();
 
         let parser = RuleParser::new();
-        
+
         for entry in std::fs::read_dir(&self.rules_directory)? {
             let entry = entry?;
             let path = entry.path();
-            
-            if path.extension().and_then(|s| s.to_str()) == Some("yaml") ||
-               path.extension().and_then(|s| s.to_str()) == Some("yml") {
-                
+
+            if path.extension().and_then(|s| s.to_str()) == Some("yaml")
+                || path.extension().and_then(|s| s.to_str()) == Some("yml")
+            {
                 match parser.parse_file(&path) {
                     Ok(rule) => {
                         tracing::info!("Loaded rule: {} ({})", rule.name, rule.id);
-                        
+
                         // Initialize stats
                         let stats = RuleStats {
                             rule_id: rule.id.clone(),
@@ -149,7 +159,7 @@ impl RulesEngine {
                             avg_execution_time_ms: 0.0,
                             enabled: rule.enabled,
                         };
-                        
+
                         self.stats.insert(rule.id.clone(), stats);
                         self.rules.insert(rule.id.clone(), rule);
                     }
@@ -160,7 +170,11 @@ impl RulesEngine {
             }
         }
 
-        tracing::info!("Loaded {} rules from {:?}", self.rules.len(), self.rules_directory);
+        tracing::info!(
+            "Loaded {} rules from {:?}",
+            self.rules.len(),
+            self.rules_directory
+        );
         Ok(())
     }
 
@@ -184,29 +198,29 @@ impl RulesEngine {
             }
 
             let start_time = std::time::Instant::now();
-            
+
             match engine.evaluate_rule(rule, event, &mut self.correlator) {
                 Ok(Some(rule_match)) => {
                     let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
-                    
+
                     // Update stats
                     if let Some(stats) = self.stats.get_mut(rule_id) {
                         stats.total_matches += 1;
                         stats.last_match = Some(Utc::now());
-                        
+
                         // Update moving average
                         let count = stats.total_evaluations as f64;
-                        stats.avg_execution_time_ms = 
+                        stats.avg_execution_time_ms =
                             (stats.avg_execution_time_ms * (count - 1.0) + elapsed) / count;
                     }
-                    
+
                     tracing::info!(
                         "Rule match: {} -> {} (confidence: {:.2})",
                         rule.name,
                         rule_match.message,
                         rule_match.confidence
                     );
-                    
+
                     matches.push(rule_match);
                 }
                 Ok(None) => {
@@ -214,7 +228,7 @@ impl RulesEngine {
                     let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
                     if let Some(stats) = self.stats.get_mut(rule_id) {
                         let count = stats.total_evaluations as f64;
-                        stats.avg_execution_time_ms = 
+                        stats.avg_execution_time_ms =
                             (stats.avg_execution_time_ms * (count - 1.0) + elapsed) / count;
                     }
                 }
@@ -251,7 +265,10 @@ impl RulesEngine {
     /// Enable/disable the rules engine
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
-        tracing::info!("Rules engine {}", if enabled { "enabled" } else { "disabled" });
+        tracing::info!(
+            "Rules engine {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Enable/disable a specific rule
@@ -261,7 +278,11 @@ impl RulesEngine {
             if let Some(stats) = self.stats.get_mut(rule_id) {
                 stats.enabled = enabled;
             }
-            tracing::info!("Rule {} {}", rule_id, if enabled { "enabled" } else { "disabled" });
+            tracing::info!(
+                "Rule {} {}",
+                rule_id,
+                if enabled { "enabled" } else { "disabled" }
+            );
             Ok(())
         } else {
             Err(RulesError::RuleNotFound(rule_id.to_string()).into())

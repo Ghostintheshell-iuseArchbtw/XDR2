@@ -1,5 +1,5 @@
 //! XDR Userland Library
-//! 
+//!
 //! This library provides safe Rust wrappers around the XDR kernel driver interface,
 //! shared memory communication, event processing, and all userland functionality.
 
@@ -20,7 +20,7 @@ pub use uuid::Uuid;
 // Generated FFI bindings
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/xdr_bindings.rs"));
-    
+
     // Link to our C helper functions
     extern "C" {
         pub fn xdr_abi_version() -> u32;
@@ -30,41 +30,52 @@ pub mod ffi {
         pub fn xdr_max_string() -> u32;
         pub fn xdr_event_record_size() -> u32;
         pub fn xdr_shm_header_size() -> u32;
-        
+
         pub fn xdr_ioctl_get_version() -> u32;
         pub fn xdr_ioctl_map_shm() -> u32;
         pub fn xdr_ioctl_set_config() -> u32;
         pub fn xdr_ioctl_peek_fallback() -> u32;
         pub fn xdr_ioctl_dequeue_fallback() -> u32;
         pub fn xdr_ioctl_user_event() -> u32;
-        
+
+        #[cfg(windows)]
         pub fn xdr_validate_event_record(record: *const XDR_EVENT_RECORD) -> i32;
         pub fn xdr_fnv1a_hash(data: *const std::ffi::c_void, length: usize) -> u64;
         pub fn xdr_current_timestamp() -> u64;
         pub fn xdr_filetime_to_unix(filetime: u64) -> u64;
-        
+
         pub fn xdr_get_process_info(
             pid: u32,
             image_path: *mut u16,
             image_path_size: usize,
             session_id: *mut u32,
         ) -> i32;
-        
+
         pub fn xdr_is_admin() -> i32;
         pub fn xdr_enable_debug_privilege() -> i32;
     }
 }
 
 // Public modules
-pub mod driver;
-pub mod events;
+#[cfg(windows)]
 pub mod config;
-pub mod storage;
-pub mod rules;
-pub mod pipeline;
-pub mod live_response;
+#[cfg(windows)]
 pub mod crypto;
+#[cfg(windows)]
+pub mod driver;
+#[cfg(windows)]
 pub mod etw;
+#[cfg(windows)]
+pub mod events;
+#[cfg(windows)]
+pub mod live_response;
+#[cfg(windows)]
+pub mod pipeline;
+pub mod rules;
+#[cfg(windows)]
+pub mod storage;
+pub mod types;
+#[cfg(windows)]
 pub mod utils;
 
 // Build information
@@ -74,6 +85,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Initialize the XDR library
 /// This should be called once at application startup
+#[allow(static_mut_refs)]
 pub fn init() -> Result<()> {
     static INIT: Once = Once::new();
     static mut INIT_RESULT: Option<Result<(), anyhow::Error>> = None;
@@ -82,8 +94,8 @@ pub fn init() -> Result<()> {
         INIT.call_once(|| {
             INIT_RESULT = Some(init_internal());
         });
-        
-        match &INIT_RESULT {
+
+        match INIT_RESULT.as_ref() {
             Some(Ok(())) => Ok(()),
             Some(Err(e)) => Err(anyhow::anyhow!("Initialization failed: {}", e)),
             None => unreachable!(),
@@ -94,12 +106,12 @@ pub fn init() -> Result<()> {
 fn init_internal() -> Result<()> {
     // Initialize logging
     init_logging()?;
-    
+
     info!("XDR userland library initializing");
     info!("Version: {}", VERSION);
     info!("Build timestamp: {}", BUILD_TIMESTAMP);
     info!("Git hash: {}", GIT_HASH);
-    
+
     // Check ABI version compatibility
     let abi_version = unsafe { ffi::xdr_abi_version() };
     if abi_version != ffi::XDR_ABI_VERSION {
@@ -109,16 +121,16 @@ fn init_internal() -> Result<()> {
             abi_version
         ));
     }
-    
+
     info!("ABI version {} confirmed", abi_version);
-    
+
     // Check if running as administrator
     let is_admin = unsafe { ffi::xdr_is_admin() } != 0;
     if !is_admin {
         warn!("Not running as administrator - some functionality may be limited");
     } else {
         info!("Running with administrator privileges");
-        
+
         // Enable debug privilege for process inspection
         if unsafe { ffi::xdr_enable_debug_privilege() } != 0 {
             info!("Debug privilege enabled successfully");
@@ -126,25 +138,25 @@ fn init_internal() -> Result<()> {
             warn!("Failed to enable debug privilege");
         }
     }
-    
+
     // Initialize subsystems
+    #[cfg(windows)]
     crypto::init()?;
-    
+
     info!("XDR userland library initialized successfully");
     Ok(())
 }
 
 fn init_logging() -> Result<()> {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-    
+
     // Create a file appender for persistent logging
     let file_appender = tracing_appender::rolling::hourly("C:\\ProgramData\\XDR\\logs", "xdr.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    
+
     // Set up logging with both console and file output
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
-    
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
     tracing_subscriber::registry()
         .with(env_filter)
         .with(
@@ -152,17 +164,17 @@ fn init_logging() -> Result<()> {
                 .with_writer(std::io::stderr)
                 .with_target(true)
                 .with_thread_ids(true)
-                .compact()
+                .compact(),
         )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(non_blocking)
                 .with_target(true)
                 .with_thread_ids(true)
-                .json()
+                .json(),
         )
         .init();
-    
+
     Ok(())
 }
 
@@ -174,8 +186,7 @@ pub fn filetime_to_unix(filetime: u64) -> u64 {
 /// Convert Windows FILETIME to DateTime<Utc>
 pub fn filetime_to_datetime(filetime: u64) -> DateTime<Utc> {
     let unix_timestamp = filetime_to_unix(filetime);
-    DateTime::from_timestamp(unix_timestamp as i64, 0)
-        .unwrap_or_else(|| Utc::now())
+    DateTime::from_timestamp(unix_timestamp as i64, 0).unwrap_or_else(Utc::now)
 }
 
 /// Get current timestamp in Windows FILETIME format
@@ -192,7 +203,7 @@ pub fn fnv1a_hash(data: &[u8]) -> u64 {
 pub fn get_process_info(pid: u32) -> Result<(String, u32)> {
     let mut image_path = vec![0u16; 512];
     let mut session_id = 0u32;
-    
+
     let result = unsafe {
         ffi::xdr_get_process_info(
             pid,
@@ -201,16 +212,22 @@ pub fn get_process_info(pid: u32) -> Result<(String, u32)> {
             &mut session_id,
         )
     };
-    
+
     if result == 0 {
-        return Err(anyhow::anyhow!("Failed to get process info for PID {}", pid));
+        return Err(anyhow::anyhow!(
+            "Failed to get process info for PID {}",
+            pid
+        ));
     }
-    
+
     // Convert UTF-16 to String
-    let end_pos = image_path.iter().position(|&c| c == 0).unwrap_or(image_path.len());
+    let end_pos = image_path
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(image_path.len());
     let path = String::from_utf16(&image_path[..end_pos])
         .context("Failed to convert image path from UTF-16")?;
-    
+
     Ok((path, session_id))
 }
 
@@ -220,6 +237,7 @@ pub fn is_admin() -> bool {
 }
 
 /// Validate an event record structure
+#[cfg(windows)]
 pub fn validate_event_record(record: &ffi::XDR_EVENT_RECORD) -> bool {
     unsafe { ffi::xdr_validate_event_record(record as *const _) != 0 }
 }
@@ -227,48 +245,52 @@ pub fn validate_event_record(record: &ffi::XDR_EVENT_RECORD) -> bool {
 /// Error types for the XDR library
 #[derive(thiserror::Error, Debug)]
 pub enum XdrError {
+    #[cfg(windows)]
     #[error("Driver communication error: {0}")]
     Driver(#[from] driver::DriverError),
-    
+
     #[error("Event processing error: {0}")]
     Event(String),
-    
+
+    #[cfg(windows)]
     #[error("Storage error: {0}")]
     Storage(#[from] storage::StorageError),
-    
+
     #[error("Rules engine error: {0}")]
     Rules(#[from] rules::RulesError),
-    
+
+    #[cfg(windows)]
     #[error("Configuration error: {0}")]
     Config(#[from] config::ConfigError),
-    
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    
+
+    #[cfg(windows)]
     #[error("Windows API error: {0}")]
     Windows(#[from] windows::core::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-    
+
     #[error("Time parsing error: {0}")]
     Time(#[from] chrono::ParseError),
-    
+
     #[error("UTF-8 conversion error: {0}")]
     Utf8(#[from] std::str::Utf8Error),
-    
+
     #[error("UTF-16 conversion error: {0}")]
     Utf16(#[from] std::string::FromUtf16Error),
-    
+
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
-    
+
     #[error("Resource not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid state: {0}")]
     InvalidState(String),
-    
+
     #[error("Timeout: {0}")]
     Timeout(String),
 }
@@ -278,7 +300,7 @@ pub type XdrResult<T> = Result<T, XdrError>;
 /// Common result type for the XDR library
 pub type LibResult<T> = Result<T>;
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
@@ -306,10 +328,10 @@ mod tests {
     fn test_timestamps() {
         let filetime = current_timestamp();
         assert_ne!(filetime, 0);
-        
+
         let unix_ts = filetime_to_unix(filetime);
         assert_ne!(unix_ts, 0);
-        
+
         let dt = filetime_to_datetime(filetime);
         assert!(dt.timestamp() > 0);
     }
